@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>可公开核验的现场抽签</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>可公开核验的现场抽签</h1>
+  <nav>
+    <a href="/">① 创建轮次</a>
+    <a id="nav-round" href="#round">② 轮次管理 / 公示</a>
+    <a id="nav-verify" href="#verify">③ 独立核验</a>
+  </nav>
+</header>
+
+<main>
+  <!-- ============================= 视图 1: 创建 ============================= -->
+  <section id="view-create" class="view">
+    <h2>第 1 步：创建轮次（先在本地生成种子与承诺）</h2>
+    <p class="hint">
+      种子由本浏览器用密码学随机数生成，<strong>不会上传</strong>；服务端只接收它的 SHA-256
+      承诺和中奖名额。请立即保存种子（下载/抄录），承诺可事先张贴公示。
+    </p>
+
+    <div class="card">
+      <div class="row">
+        <label>中奖名额
+          <input type="number" id="c-winner-count" min="1" value="3">
+        </label>
+        <button id="c-generate" type="button">① 生成随机种子</button>
+      </div>
+
+      <div id="c-seed-box" class="mono-box hidden">
+        <div class="kv"><span>种子 seed（保密，揭晓前不可泄露）</span>
+          <code id="c-seed"></code></div>
+        <div class="kv"><span>承诺 commitment = SHA-256(seed)（可立即公开）</span>
+          <code id="c-commitment"></code></div>
+        <div class="row">
+          <button id="c-download-seed" type="button">下载种子凭证 .txt</button>
+          <button id="c-copy-seed" type="button">复制种子</button>
+          <button id="c-copy-commitment" type="button">复制承诺</button>
+        </div>
+        <p class="warn">⚠️ 种子只显示这一次且服务端不保存，请务必妥善保存；丢失将无法揭晓。</p>
+        <button id="c-submit" class="primary" type="button">② 仅把【承诺 + 名额】提交到服务端，创建轮次</button>
+      </div>
+
+      <div id="c-created" class="mono-box success hidden">
+        <strong>轮次已创建：</strong>
+        <div class="kv"><span>轮次编号（可公开）</span><code id="c-id"></code></div>
+        <div class="kv"><span>管理链接（含令牌，仅主持人保存）</span><code id="c-admin-url"></code></div>
+        <div class="kv"><span>公示链接（任何人可看）</span><code id="c-public-url"></code></div>
+        <div class="row">
+          <button id="c-open-admin" class="primary" type="button">进入轮次管理</button>
+          <button id="c-copy-admin" type="button">复制管理链接</button>
+        </div>
+      </div>
+    </div>
+
+    <details class="rules">
+      <summary>公开的确定性抽签规则（pick-sha256-v1）</summary>
+      <ol>
+        <li>封存时生成规范名单：按编号数值升序，每行 <code>编号⇥备注</code>，LF 分隔、无行尾换行；其 SHA-256 为名单摘要。</li>
+        <li>揭晓后对每个编号 <code>id</code> 计算
+          <code>score(id) = hex(SHA-256( UTF8( seed + ":" + str(id) ) )</code>（小写十六进制）。</li>
+        <li>全部编号按 <code>(score 升序, 编号升序)</code> 排序，前 <em>winner_count</em> 个即为中奖者，天然不重复。</li>
+        <li>任何人凭事先留存的承诺、名单摘要、导出的核验包即可离线重算复核，无需信任本服务。</li>
+      </ol>
+    </details>
+  </section>
+
+  <!-- ============================= 视图 2: 轮次 ============================= -->
+  <section id="view-round" class="view hidden">
+    <div class="row between">
+      <h2>轮次 <span id="r-id" class="mono-inline"></span>
+        <span id="r-status" class="badge"></span>
+      </h2>
+      <label class="small"><input type="checkbox" id="r-autorefresh" checked> 5 秒自动刷新（大屏公示）</label>
+    </div>
+
+    <div class="card">
+      <div class="grid2">
+        <div class="kv"><span>中奖名额</span><code id="r-winner-count"></code></div>
+        <div class="kv"><span>规则</span><code id="r-rule"></code></div>
+        <div class="kv"><span>种子承诺 SHA-256</span><code id="r-commitment" class="small"></code></div>
+        <div class="kv"><span>名单摘要 SHA-256（封存后）</span><code id="r-digest" class="small">—</code></div>
+        <div class="kv"><span>创建时间 (UTC)</span><code id="r-created"></code></div>
+        <div class="kv"><span>封存 / 揭晓时间 (UTC)</span><code id="r-times"></code></div>
+      </div>
+    </div>
+
+    <!-- 名单编辑（open） -->
+    <div id="r-edit-panel" class="card hidden">
+      <h3>登记参与者（封存前可反复修改）</h3>
+      <p class="hint">每行一人：<code>编号</code> 或 <code>编号,备注</code>（编号为正整数且唯一；支持逗号/制表符/多空格分隔）。</p>
+      <textarea id="r-editor" rows="10" placeholder="1001,张三&#10;1002,李四&#10;1003"></textarea>
+      <div class="row">
+        <button id="r-save" class="primary" type="button">保存名单到服务端</button>
+        <span id="r-count" class="small"></span>
+      </div>
+      <div class="row">
+        <button id="r-seal" type="button">🔒 核对无误，封存名单</button>
+        <span class="hint">封存要求人数 ≥ 名额；封存后名单冻结，任何人不能再改。</span>
+      </div>
+    </div>
+
+    <!-- 名单只读（sealed / revealed） -->
+    <div id="r-view-panel" class="card hidden">
+      <div class="row between">
+        <h3>已封存规范名单（<span id="r-view-count"></span> 人）</h3>
+        <button id="r-download-list" type="button">下载规范名单 .txt</button>
+      </div>
+      <pre id="r-canonical" class="list-pre"></pre>
+    </div>
+
+    <!-- 揭晓（sealed） -->
+    <div id="r-reveal-panel" class="card hidden">
+      <h3>揭晓</h3>
+      <p class="hint">粘贴创建轮次时保存的种子。承诺不匹配时轮次保持封存，可重试；已揭晓后重复提交不会重抽。</p>
+      <div class="row">
+        <input type="text" id="r-seed-input" placeholder="十六进制种子，例如 3a9f..." autocomplete="off">
+        <button id="r-reveal-btn" class="primary" type="button">提交种子揭晓</button>
+      </div>
+    </div>
+
+    <!-- 结果（revealed） -->
+    <div id="r-result-panel" class="card hidden">
+      <div class="row between">
+        <h3>🏆 抽签结果</h3>
+        <button id="r-download-package" class="primary" type="button">导出核验包 .json</button>
+      </div>
+      <div class="kv"><span>揭晓种子</span><code id="r-seed" class="small"></code></div>
+      <table id="r-winners-table">
+        <thead><tr><th>名次</th><th>编号</th><th>备注</th><th>score = SHA-256(seed:id)</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p class="hint small">把核验包拿到 <a href="#verify">③ 独立核验</a> 页（或用 <code>verify_package.py</code>），
+        结合事先留存的承诺与名单摘要即可独立重算。</p>
+    </div>
+  </section>
+
+  <!-- ============================= 视图 3: 核验 ============================= -->
+  <section id="view-verify" class="view hidden">
+    <h2>第 3 步：独立核验（全部在本浏览器内重算，不访问服务端）</h2>
+    <div class="card">
+      <div class="row">
+        <label>核验包（导出的 .json）
+          <input type="file" id="v-file" accept="application/json,.json">
+        </label>
+      </div>
+      <details>
+        <summary>没有文件？也可把核验包 JSON 粘贴到这里</summary>
+        <textarea id="v-paste" rows="6" placeholder='{"package_version":1,...}'></textarea>
+        <button id="v-paste-btn" type="button">核验粘贴内容</button>
+      </details>
+      <div class="row">
+        <label>事先留存的承诺（留空则只检查包内一致性）
+          <input type="text" id="v-commitment" placeholder="SHA-256 十六进制（可选）"></label>
+      </div>
+      <div class="row">
+        <label>事先留存的名单摘要（留空则只检查包内摘要）
+          <input type="text" id="v-digest" placeholder="SHA-256 十六进制（可选）"></label>
+      </div>
+    </div>
+    <div id="v-report" class="card hidden"></div>
+  </section>
+</main>
+
+<footer>
+  <span>Flask + SQLite + 原生 JavaScript · 无外部账号 / 无付费服务 ·
+    规则与代码均可审计</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
